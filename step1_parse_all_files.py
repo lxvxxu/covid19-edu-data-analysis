@@ -1,13 +1,13 @@
 """
-STEP 1: 생활기록부 파싱 (완전 호환 버전)
-=========================================
+STEP 1: 생활기록부 파싱 (OCR 호환 버전)
+========================================
 개선사항:
-1. thefuzz 퍼지 매칭 (Levenshtein Distance)
-2. SHA-256 비식별화
-3. 모든 step 파일과 완벽 호환
-4. 용량-반응 분석용 covid_intensity 추가
-
-작성일: 2025
+1. OCR 변환 텍스트 파싱 지원 (공백 불규칙 처리)
+2. 세특 파싱 패턴 개선
+3. 체육/예술 성적 파싱 추가
+4. 코로나 기간: 2020.3 ~ 2022.3 (2020~2022년)
+5. thefuzz 퍼지 매칭
+6. SHA-256 비식별화
 """
 
 import os
@@ -21,78 +21,73 @@ from collections import Counter
 import warnings
 warnings.filterwarnings('ignore')
 
-# thefuzz 임포트 (설치 안 되어 있으면 기본 매칭 사용)
+# thefuzz 임포트
 try:
     from thefuzz import fuzz, process
     FUZZY_AVAILABLE = True
+    print("✅ thefuzz 로드 완료")
 except ImportError:
     FUZZY_AVAILABLE = False
     print("⚠️  thefuzz 미설치 - 기본 매칭 사용 (pip install thefuzz python-Levenshtein)")
 
 
 class StudentRecordParser:
-    """생활기록부 파서 (완전 호환 버전)"""
+    """생활기록부 파서 (OCR 호환 버전)"""
     
     def __init__(self):
         # 교육부 공식 과목 리스트
         self.all_subjects = [
-            '공통국어1', '공통국어2', '공통수학1', '공통수학2', '공통영어1', '공통영어2',
-            '한국사1', '한국사2', '통합사회1', '통합사회2', '통합과학1', '통합과학2',
-            '과학탐구실험1', '과학탐구실험2', '기본수학1', '기본수학2', '기본영어1', '기본영어2',
-            '국어', '수학', '영어', '한국사', '통합사회', '통합과학', '과학탐구실험',
-            '화법과 작문', '독서', '언어와 매체', '문학', '실용 국어', '심화 국어',
-            '고전 읽기', '화법과 언어', '독서와 작문', '주제 탐구 독서', '문학과 영상',
-            '직무 의사소통', '독서 토론과 글쓰기', '매체 의사소통', '언어생활 탐구',
-            '수학Ⅰ', '수학Ⅱ', '미적분', '확률과 통계', '실용 수학', '기하', '경제 수학',
-            '수학과제 탐구', '기본 수학', '인공지능 수학', '대수', '미적분I', '미적분II',
-            '직무 수학', '수학과 문화', '실용 통계', '수학 1', '수학 I', '수학 II',
-            '영어회화', '영어Ⅰ', '영어독해와 작문', '영어Ⅱ', '실용영어', '영어권 문화',
-            '진로 영어', '영미 문학 읽기', '기본 영어', '영어 발표와 토론', '심화 영어',
-            '심화 영어 독해와 작문', '직무 영어', '실생활 영어 회화', '미디어 영어',
-            '세계 문화와 영어', '실용 영어회화', '실용영어 I', '영어 II', '영어 I',
-            '한국지리', '세계지리', '세계사', '동아시아사', '경제', '정치와 법', '사회·문화',
-            '생활과 윤리', '윤리와 사상', '여행지리', '사회문제 탐구', '고전과 윤리',
-            '세계시민과 지리', '현대사회와 윤리', '한국지리 탐구', '도시의 미래 탐구',
-            '동아시아 역사 기행', '법과 사회', '인문학과 윤리', '국제 관계의 이해',
-            '역사로 탐구하는 현대 세계', '금융과 경제생활', '윤리문제 탐구',
-            '기후변화와 지속가능한 세계', '사회', '현대 세계의 변화',
-            '물리학Ⅰ', '화학Ⅰ', '생명과학Ⅰ', '지구과학Ⅰ', '물리학Ⅱ', '화학Ⅱ',
-            '생명과학Ⅱ', '지구과학Ⅱ', '과학사', '생활과 과학', '융합과학', '과학',
-            '물리학 I', '화학 I', '생명과학 I', '지구과학 I',
-            '체육', '운동과 건강', '스포츠 생활', '체육 탐구',
-            '음악', '미술', '연극', '음악 연주', '음악 감상과 비평',
-            '미술 창작', '미술 감상과 비평',
-            '기술·가정', '정보', '농업 생명 과학', '공학 일반', '창의 경영',
-            '해양 문화와 기술', '가정과학', '지식 재산 일반', '인공지능 기초', '철학', '기술 . 가정',
-            '독일어I', '프랑스어I', '스페인어I', '중국어I', '일본어I', '러시아어I',
-            '아랍어I', '베트남어I', '독일어II', '프랑스어II', '스페인어II', '중국어II',
-            '일본어II', '러시아어II', '아랍어II', '베트남어II', '일본어 I',
-            '한문I', '한문II', '한문 I', '철학', '논리학', '심리학', '교육학', '종교학',
-            '진로와 직업', '보건', '환경', '실용 경제', '논술', '안전한 생활'
+            '국어', '국어Ⅰ', '국어Ⅱ', '국어 I', '국어 II',
+            '수학', '수학Ⅰ', '수학Ⅱ', '수학 I', '수학 II',
+            '영어', '영어Ⅰ', '영어Ⅱ', '영어 I', '영어 II',
+            '화법과 작문', '화법과작문', '독서와 문법', '독서와문법',
+            '문학', '독서', '언어와 매체',
+            '미적분Ⅰ', '미적분Ⅱ', '미적분 I', '미적분 II', '미적분',
+            '확률과 통계', '확률과통계', '기하와 벡터', '기하와벡터', '기하',
+            '실용영어Ⅰ', '실용영어Ⅱ', '실용영어 I', '실용영어 II', '실용영어',
+            '영어회화', '영어독해와 작문', '영어독해와작문',
+            '한국사', '한국지리', '세계지리', '세계사', '동아시아사',
+            '경제', '정치와 법', '법과정치', '사회·문화', '사회문화', '사회',
+            '생활과 윤리', '윤리와 사상', '윤리와사상',
+            '물리학Ⅰ', '물리학Ⅱ', '물리 I', '물리 II', '물리학 I', '물리학 II',
+            '화학Ⅰ', '화학Ⅱ', '화학 I', '화학 II', '화학',
+            '생명과학Ⅰ', '생명과학Ⅱ', '생명과학 I', '생명과학 II', '생명과학',
+            '지구과학Ⅰ', '지구과학Ⅱ', '지구과학 I', '지구과학 II', '지구과학',
+            '과학', '융합과학', '과학탐구실험',
+            '체육', '운동과 건강', '스포츠 생활', '스포츠문화', '스포츠과학',
+            '음악', '음악과생활', '음악과진로', '음악 감상과 비평',
+            '미술', '미술창작', '미술 감상과 비평',
+            '기술·가정', '기술 . 가정', '기술가정', '정보',
+            '한문Ⅰ', '한문Ⅱ', '한문 I', '한문 II', '한문',
+            '중국어Ⅰ', '중국어Ⅱ', '중국어 I', '중국어 II',
+            '일본어Ⅰ', '일본어Ⅱ', '일본어 I', '일본어 II',
+            '독일어Ⅰ', '프랑스어Ⅰ', '스페인어Ⅰ',
+            '실용경제', '논술', '진로와 직업', '철학', '심리학', '교육학',
+            '고전', '고전읽기',
         ]
         
         # 교과군 매핑
         self.subject_to_group = self._build_subject_group_map()
         
-        # 키워드 정의
+        # 키워드
         self.exploration_keywords = [
             '실험', '실습', '관찰', '측정', '분석', '탐구', '연구', '조사',
-            '탐색', '발견', '현장', '답사', '견학', '방문', '체험', '실사',
-            '프로젝트', '과제연구', '팀프로젝트', '모둠활동', '소집단',
-            '가설', '검증', '실험설계', '데이터수집', '결과분석', '보고서작성'
+            '탐색', '발견', '현장', '답사', '견학', '방문', '체험',
+            '프로젝트', '과제연구', '팀프로젝트', '모둠활동',
+            '가설', '검증', '실험설계', '데이터', '결과분석', '보고서'
         ]
         
         self.online_keywords = [
             '온라인', '원격', '비대면', '화상', '실시간', '쌍방향',
-            'zoom', '줌', 'ZOOM', '구글클래스룸', '클래스룸', 'e-학습터',
-            '이학습터', 'EBS', 'ebs', '위두랑', '디지털', '인터넷',
-            '원격수업', '온라인수업', '화상수업', '동영상', '영상'
+            'zoom', '줌', '구글클래스룸', 'e-학습터', '이학습터',
+            'EBS', 'ebs', '위두랑', '디지털', '인터넷', '원격수업',
+            '온라인수업', '화상수업', '동영상', '영상'
         ]
         
         self.qualitative_keywords = [
             '과정', '노력', '태도', '참여', '열정', '몰입', '집중',
             '협력', '협동', '배려', '나눔', '소통', '공감', '존중',
-            '성장', '발전', '개선', '극복', '도전', '변화', '진보'
+            '성장', '발전', '개선', '극복', '도전', '변화'
         ]
         
         # 성적 등급 매핑
@@ -100,30 +95,32 @@ class StudentRecordParser:
             'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5,
             '1': 1, '2': 2, '3': 3, '4': 4, '5': 5,
             '6': 6, '7': 7, '8': 8, '9': 9,
-            '수': 1, '우': 2, '미': 3, '양': 4, '가': 5
+            '수': 1, '우': 2, '미': 3, '양': 4, '가': 5,
+            'P': 0  # Pass
         }
     
     def _build_subject_group_map(self) -> Dict[str, str]:
-        """교과군 매핑 생성"""
+        """교과군 매핑"""
         mapping = {}
         for subject in self.all_subjects:
-            if any(kw in subject for kw in ['국어', '화법', '작문', '독서', '언어', '매체', '문학', '고전']):
+            subj_lower = subject.lower()
+            if any(kw in subject for kw in ['국어', '화법', '작문', '독서', '언어', '문학', '고전']):
                 mapping[subject] = '국어'
-            elif any(kw in subject for kw in ['수학', '미적분', '확률', '통계', '기하', '대수']):
+            elif any(kw in subject for kw in ['수학', '미적분', '확률', '통계', '기하']):
                 mapping[subject] = '수학'
             elif any(kw in subject for kw in ['영어', 'English']):
                 mapping[subject] = '영어'
             elif any(kw in subject for kw in ['역사', '한국사', '세계사', '동아시아', '지리', '경제', '정치', '법', '사회', '윤리']):
                 mapping[subject] = '사회'
-            elif any(kw in subject for kw in ['과학', '물리', '화학', '생명', '지구', '융합', '탐구실험']):
+            elif any(kw in subject for kw in ['과학', '물리', '화학', '생명', '지구', '융합']):
                 mapping[subject] = '과학'
             elif any(kw in subject for kw in ['체육', '운동', '스포츠']):
                 mapping[subject] = '체육'
             elif any(kw in subject for kw in ['음악', '미술', '연극', '예술']):
                 mapping[subject] = '예술'
-            elif any(kw in subject for kw in ['기술', '가정', '정보', '농업', '공학']):
-                mapping[subject] = '기술·가정'
-            elif any(kw in subject for kw in ['독일어', '프랑스어', '스페인어', '중국어', '일본어', '러시아어']):
+            elif any(kw in subject for kw in ['기술', '가정', '정보']):
+                mapping[subject] = '기술가정'
+            elif any(kw in subject for kw in ['독일어', '프랑스어', '스페인어', '중국어', '일본어', '한문']):
                 mapping[subject] = '제2외국어'
             else:
                 mapping[subject] = '교양'
@@ -131,20 +128,27 @@ class StudentRecordParser:
     
     @staticmethod
     def generate_anonymous_id(name: str, student_id: str) -> str:
-        """SHA-256 해싱을 통한 비식별화 ID 생성"""
+        """SHA-256 비식별화"""
         combined = f"{name}_{student_id}"
         return hashlib.sha256(combined.encode('utf-8')).hexdigest()[:16]
     
-    def fuzzy_match_subject(self, query: str, threshold: int = 80) -> Tuple[Optional[str], int]:
-        """퍼지 매칭으로 과목명 찾기"""
+    def fuzzy_match_subject(self, query: str, threshold: int = 70) -> Tuple[Optional[str], int]:
+        """퍼지 매칭"""
         if not query or len(query) < 2:
             return None, 0
         
-        # 정확 매칭 먼저
+        # 정확 매칭
         if query in self.all_subjects:
             return query, 100
         
-        # thefuzz 사용 가능하면 퍼지 매칭
+        # 공백/특수문자 제거 후 매칭
+        cleaned = re.sub(r'[\s./]+', '', query)
+        for subject in self.all_subjects:
+            cleaned_subj = re.sub(r'[\s./]+', '', subject)
+            if cleaned == cleaned_subj:
+                return subject, 100
+        
+        # thefuzz 퍼지 매칭
         if FUZZY_AVAILABLE:
             result = process.extractOne(query, self.all_subjects, scorer=fuzz.token_sort_ratio)
             if result and result[1] >= threshold:
@@ -155,14 +159,15 @@ class StudentRecordParser:
             if query in subject or subject in query:
                 return subject, 80
         
-        return None, 0
+        return query, 50  # 매칭 실패해도 원본 반환
     
     def extract_years_from_text(self, text: str) -> List[int]:
-        """텍스트에서 모든 연도 추출"""
+        """연도 추출"""
         patterns = [
-            r'(20\d{2})[\.,\-/]\s*\d{2}[\.,\-/]\s*\d{2}',
+            r'(20\d{2})[\.,\-/]\s*\d{1,2}[\.,\-/]\s*\d{1,2}',
             r'\((20\d{2})\)',
             r'(20\d{2})년',
+            r'(20\d{2})학년',
         ]
         
         all_years = []
@@ -178,309 +183,348 @@ class StudentRecordParser:
         return all_years
     
     def estimate_grade_years(self, text: str, filename: str) -> Dict[int, int]:
-        """학년별 연도 추정 (수상경력 또는 빈도 분석)"""
+        """학년별 연도 추정"""
         grade_years = {}
         
-        # 수상경력에서 연도-학년 패턴 찾기
-        award_patterns = [
-            r'(20\d{2})[\./\-]\d{2}[\./\-]\d{2}\s*(\d)학년',
-            r'(20\d{2})년.*?(\d)학년',
+        # 수상경력에서 패턴 찾기
+        patterns = [
+            r'(20\d{2})[\./\-]\d{1,2}[\./\-]\d{1,2}.*?(\d)학년',
+            r'(\d)학년.*?(20\d{2})',
         ]
         
-        for pattern in award_patterns:
+        for pattern in patterns:
             matches = re.findall(pattern, text)
             for match in matches:
                 try:
-                    year, grade = int(match[0]), int(match[1])
-                    if 1 <= grade <= 4 and 2015 <= year <= 2025:
+                    if match[0].isdigit() and len(match[0]) == 4:
+                        year, grade = int(match[0]), int(match[1])
+                    else:
+                        grade, year = int(match[0]), int(match[1])
+                    if 1 <= grade <= 3 and 2010 <= year <= 2025:
                         if grade not in grade_years:
                             grade_years[grade] = year
                 except:
                     pass
         
-        # 수상경력에서 못 찾으면 빈도 분석
+        # 연도만 추출해서 추정
         if not grade_years:
             all_years = self.extract_years_from_text(text)
             if all_years:
-                year_counter = Counter(all_years)
-                top_years = sorted([y for y, _ in year_counter.most_common(3)])
-                if len(top_years) >= 3:
-                    grade_years = {1: top_years[0], 2: top_years[1], 3: top_years[2]}
-                elif len(top_years) >= 1:
-                    base_year = top_years[0]
-                    grade_years = {1: base_year, 2: base_year + 1, 3: base_year + 2}
+                year_counts = Counter(all_years)
+                common_years = sorted(year_counts.keys())
+                if len(common_years) >= 1:
+                    base_year = min(common_years)
+                    for i, grade in enumerate([1, 2, 3]):
+                        grade_years[grade] = base_year + i
         
         return grade_years
     
-    def extract_remote_days(self, text: str) -> Dict[int, int]:
-        """학년별 원격수업일수 추출 (다양한 오타 패턴 지원)"""
-        patterns = [
-            r'원격\s*수업\s*일수?\s*(\d+)\s*일?',
-            r'원격\s*일수?\s*(\d+)\s*일?',
-            r'인격\s*수업\s*일수?\s*(\d+)\s*일?',  # 오타: 원격→인격
-            r'원격\s*수입\s*일수?\s*(\d+)\s*일?',  # 오타: 수업→수입
-            r'인격\s*수입\s*일수?\s*(\d+)\s*일?',  # 복합 오타
-            r'원격수업일수(\d+)일?',
-            r'인격수업일수(\d+)일?',
-            r'원격수입일수(\d+)일?',
-            r'개근\s*[,.\s]*원격\s*수업?\s*일수?\s*(\d+)\s*일?',
-        ]
+    def parse_student_info(self, text: str, filename: str) -> Dict:
+        """학생 기본 정보 파싱"""
+        # 파일명에서 정보 추출
+        parts = filename.replace('.txt', '').split('_')
         
-        all_remote_values = []
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                try:
-                    value = int(match)
-                    if 0 <= value <= 200:
-                        all_remote_values.append(value)
-                except:
-                    pass
+        student_id = parts[0] if parts else "unknown"
+        grade_level = re.search(r'(\d)학년', filename)
+        grade_level = int(grade_level.group(1)) if grade_level else 0
+        major = parts[2] if len(parts) > 2 else "unknown"
+        name = parts[3] if len(parts) > 3 else "unknown"
+        admission = parts[4] if len(parts) > 4 else "unknown"
+        
+        # 비식별화 ID
+        anonymous_id = self.generate_anonymous_id(name, student_id)
+        
+        # 학년별 연도 추정
+        grade_years = self.estimate_grade_years(text, filename)
+        
+        # 코로나 여부 판단 (2020년 3월 ~ 2022년 3월 = 2020~2022년)
+        grade1_covid = 1 if grade_years.get(1) and 2020 <= grade_years[1] <= 2022 else 0
+        grade2_covid = 1 if grade_years.get(2) and 2020 <= grade_years[2] <= 2022 else 0
+        grade3_covid = 1 if grade_years.get(3) and 2020 <= grade_years[3] <= 2022 else 0
+        
+        # 코로나 강도 (0~3)
+        covid_intensity = grade1_covid + grade2_covid + grade3_covid
+        any_covid = 1 if covid_intensity > 0 else 0
+        
+        return {
+            'student_id': anonymous_id,
+            'anonymous_id': anonymous_id,
+            'original_id': student_id,
+            'name_hash': hashlib.sha256(name.encode()).hexdigest()[:8],
+            'major': major,
+            'admission_type': admission,
+            'current_grade': grade_level,
+            
+            # 학년별 연도
+            'grade_year_1': grade_years.get(1),
+            'grade_year_2': grade_years.get(2),
+            'grade_year_3': grade_years.get(3),
+            'grade1_year': grade_years.get(1),
+            'grade2_year': grade_years.get(2),
+            'grade3_year': grade_years.get(3),
+            'hs_graduation_year': grade_years.get(3) + 1 if grade_years.get(3) else None,
+            'graduation_year': grade_years.get(3) + 1 if grade_years.get(3) else None,
+            
+            # 코로나 관련
+            'grade1_covid': grade1_covid,
+            'grade2_covid': grade2_covid,
+            'grade3_covid': grade3_covid,
+            'covid_intensity': covid_intensity,
+            'any_covid': any_covid,
+            'has_covid': any_covid,
+            'has_covid_period': any_covid,
+            'covid_period': any_covid,
+            
+            # 재수 여부
+            'is_repeat': 0,
+        }
+    
+    def extract_grades(self, text: str, student_id: str, grade_years: Dict) -> List[Dict]:
+        """성적 데이터 추출 (OCR 호환)"""
+        grades = []
+        
+        # OCR 텍스트 정리 (불필요한 공백 제거)
+        cleaned_text = re.sub(r'\s+', ' ', text)
         
         # 학년별 섹션 분리
-        remote_by_grade = {1: 0, 2: 0, 3: 0}
-        sections = re.split(r'\[(\d)학년\]', text)
+        grade_sections = re.split(r'\[(\d)학년\]', cleaned_text)
         
-        for i in range(1, len(sections), 2):
+        # 일반 과목 성적 패턴 (OCR 호환)
+        # 패턴: 교과 과목 단위수 원점수/평균(표준편차) 성취도(수강자수) [석차등급]
+        patterns = [
+            # 표준 패턴
+            r'([가-힣A-Za-z\s./ⅠⅡ]+?)\s+(\d+)\s+(\d+)\s*/\s*(\d+\.?\s*\d*)\s*\(\s*(\d+\.?\s*\d*)\s*\)\s+([A-EP])\s*\(\s*(\d+)\s*\)\s*(\d)?',
+            # 간단 패턴
+            r'([가-힣]+)\s+([가-힣A-Za-zⅠⅡ\s]+?)\s+(\d+)\s+(\d+)\s*/\s*(\d+\.?\d*)\s*\((\d+\.?\d*)\)\s+([A-EP])\s*\((\d+)\)',
+        ]
+        
+        for i in range(1, len(grade_sections), 2):
             try:
-                grade = int(sections[i])
-                section_text = sections[i + 1] if i + 1 < len(sections) else ""
+                grade_year = int(grade_sections[i])
+                section_text = grade_sections[i + 1] if i + 1 < len(grade_sections) else ""
+                year = grade_years.get(grade_year)
                 
                 for pattern in patterns:
-                    matches = re.findall(pattern, section_text, re.IGNORECASE)
-                    for match in matches:
+                    for match in re.finditer(pattern, section_text):
                         try:
-                            value = int(match)
-                            if value > 0 and value <= 200:
-                                remote_by_grade[grade] = max(remote_by_grade.get(grade, 0), value)
+                            groups = match.groups()
+                            subject_raw = groups[0].strip() if len(groups[0]) > 1 else groups[1].strip() if len(groups) > 1 else ""
+                            
+                            # 숫자 정리 (OCR 오류 수정)
+                            def clean_num(s):
+                                return float(re.sub(r'\s+', '', str(s)))
+                            
+                            subject_matched, score = self.fuzzy_match_subject(subject_raw)
+                            subject = subject_matched if subject_matched else subject_raw
+                            
+                            # 성취도 찾기
+                            achievement = None
+                            for g in groups:
+                                if g and g in 'ABCDEP':
+                                    achievement = g
+                                    break
+                            
+                            if not achievement:
+                                continue
+                            
+                            grade_numeric = self.grade_map.get(achievement, 3)
+                            grade_type = 'achievement' if achievement in 'ABCDEP' else 'rank'
+                            
+                            grades.append({
+                                'student_id': student_id,
+                                'grade_year': grade_year,
+                                'year': year,
+                                'term': 1,
+                                'subject': subject,
+                                'subject_raw': subject_raw,
+                                'subject_group': self.subject_to_group.get(subject, '교양'),
+                                'achievement': achievement,
+                                'grade_numeric': grade_numeric,
+                                'grade_type': grade_type,
+                                'match_score': score,
+                            })
                         except:
                             pass
             except:
                 pass
         
-        return remote_by_grade
-    
-    def parse_student_info(self, text: str, filename: str) -> Optional[Dict]:
-        """학생 정보 파싱"""
-        try:
-            parts = filename.replace('.txt', '').split('_')
-            if len(parts) < 4:
-                return None
-            
-            student_id = parts[0]
-            grade = parts[1].replace('학년', '')
-            major = parts[2]
-            name = parts[3]
-            admission_type = parts[4] if len(parts) > 4 else 'unknown'
-            
-            # 비식별화 ID 생성
-            anonymous_id = self.generate_anonymous_id(name, student_id)
-            
-            # 학년별 연도 추정
-            grade_years = self.estimate_grade_years(text, filename)
-            
-            # 원격수업일수 추출
-            remote_days = self.extract_remote_days(text)
-            total_remote_days = sum(remote_days.values())
-            
-            # 코로나 여부 판단 (2020~2022년)
-            grade1_covid = 1 if grade_years.get(1) and 2020 <= grade_years[1] <= 2022 else 0
-            grade2_covid = 1 if grade_years.get(2) and 2020 <= grade_years[2] <= 2022 else 0
-            grade3_covid = 1 if grade_years.get(3) and 2020 <= grade_years[3] <= 2022 else 0
-            
-            # 코로나 강도 (0~3): 용량-반응 분석용
-            covid_intensity = grade1_covid + grade2_covid + grade3_covid
-            any_covid = 1 if covid_intensity > 0 else 0
-            
-            # 고교 졸업년도 추정
-            hs_graduation_year = grade_years.get(3, 0) if grade_years.get(3) else None
-            
-            return {
-                # 기본 정보 (비식별화)
-                'student_id': anonymous_id,  # step3/step4 호환용
-                'anonymous_id': anonymous_id,
-                'name': name,  # step5에서 참조, 실제 저장 시 삭제
-                'grade': int(grade) if grade.isdigit() else 0,
-                'major': major,
-                'admission_type': admission_type,
-                
-                # 연도 정보
-                'grade_year_1': grade_years.get(1),
-                'grade_year_2': grade_years.get(2),
-                'grade_year_3': grade_years.get(3),
-                'hs_graduation_year': hs_graduation_year,
-                'admission_year': hs_graduation_year,
-                'graduation_year': hs_graduation_year,
-                
-                # 코로나 관련 (다양한 컬럼명 호환)
-                'grade1_covid': grade1_covid,
-                'grade2_covid': grade2_covid,
-                'grade3_covid': grade3_covid,
-                'covid_intensity': covid_intensity,  # 용량-반응 분석용 (0~3)
-                'any_covid': any_covid,
-                'has_covid': any_covid,  # step3 호환
-                'has_covid_period': any_covid,  # step4 호환
-                'covid_period': any_covid,  # step5 호환
-                
-                # 원격수업
-                'remote_days_grade1': remote_days.get(1, 0),
-                'remote_days_grade2': remote_days.get(2, 0),
-                'remote_days_grade3': remote_days.get(3, 0),
-                'total_remote_days': total_remote_days,
-                
-                # 메타데이터
-                'is_repeat': 0,
-                'grade_years': grade_years,
-                'remote_days': remote_days,
-            }
-        except Exception as e:
-            print(f"  ❌ 파싱 오류: {e}")
-            return None
-    
-    def extract_grades(self, text: str, student_id: str, grade_years: Dict) -> List[Dict]:
-        """성적 데이터 추출"""
-        grades = []
+        # 체육/예술 성적 파싱
+        pe_art_pattern = r'<\s*체육\s*[.·]\s*예술.*?>'
+        pe_art_sections = re.split(pe_art_pattern, cleaned_text)
         
-        # 학년별 섹션 분리
-        sections = re.split(r'\[(\d)학년\]', text)
+        # 체육/예술 패턴: 교과 과목 단위수 성취도 단위수 성취도
+        pe_pattern = r'(체육|예술[^가-힣]*)\s+([가-힣A-Za-z\s]+?)\s+(\d+)\s+([A-EP])\s+(\d+)\s+([A-EP])'
         
-        # 성적 패턴
-        pattern = r'([가-힣A-Za-z\s./Ⅰ-Ⅹ]+?)\s+(\d+)\s+(\d+)/(\d+\.?\d*)\((\d+\.?\d*)\)\s+([A-E1-9수우미양가])\((\d+)\)'
-        
-        for i in range(1, len(sections), 2):
-            try:
-                grade_year = int(sections[i])
-                section_text = sections[i + 1] if i + 1 < len(sections) else ""
-                year = grade_years.get(grade_year)
-                
-                for match in re.finditer(pattern, section_text):
-                    subject_raw = match.group(1).strip()
-                    subject_matched, score = self.fuzzy_match_subject(subject_raw)
-                    subject = subject_matched if subject_matched else subject_raw
+        for section in pe_art_sections[1:] if len(pe_art_sections) > 1 else [cleaned_text]:
+            for match in re.finditer(pe_pattern, section):
+                try:
+                    subject_group = match.group(1).strip()
+                    subject = match.group(2).strip()
                     
-                    achievement = match.group(6)
-                    grade_numeric = self.grade_map.get(achievement)
+                    # 1학기
+                    achievement1 = match.group(4)
+                    grades.append({
+                        'student_id': student_id,
+                        'grade_year': 1,
+                        'term': 1,
+                        'subject': subject,
+                        'subject_raw': subject,
+                        'subject_group': '체육' if '체육' in subject_group else '예술',
+                        'achievement': achievement1,
+                        'grade_numeric': self.grade_map.get(achievement1, 1),
+                        'grade_type': 'achievement',
+                    })
                     
-                    if grade_numeric:
-                        grade_type = 'achievement' if achievement in 'ABCDE수우미양가' else 'rank'
-                        
-                        grades.append({
-                            'student_id': student_id,
-                            'grade_year': grade_year,
-                            'year': year,
-                            'term': 1,
-                            'subject': subject,
-                            'subject_raw': subject_raw,
-                            'subject_group': self.subject_to_group.get(subject, '교양'),
-                            'units': int(match.group(2)),
-                            'raw_score': int(match.group(3)),
-                            'average': float(match.group(4)),
-                            'std_dev': float(match.group(5)),
-                            'achievement': achievement,
-                            'grade_numeric': grade_numeric,
-                            'grade_type': grade_type,
-                            'num_students': int(match.group(7)),
-                            'match_score': score,
-                        })
-            except:
-                pass
+                    # 2학기
+                    achievement2 = match.group(6)
+                    grades.append({
+                        'student_id': student_id,
+                        'grade_year': 1,
+                        'term': 2,
+                        'subject': subject,
+                        'subject_raw': subject,
+                        'subject_group': '체육' if '체육' in subject_group else '예술',
+                        'achievement': achievement2,
+                        'grade_numeric': self.grade_map.get(achievement2, 1),
+                        'grade_type': 'achievement',
+                    })
+                except:
+                    pass
         
         return grades
     
     def extract_seteuk(self, text: str, student_id: str, grade_years: Dict) -> List[Dict]:
-        """세특 데이터 추출"""
+        """세특 데이터 추출 (OCR 호환)"""
         seteuk_list = []
         
-        # 세특 패턴
-        patterns = [
-            r'\[세부능력특기사항\]\s*([가-힣A-Za-z\s./Ⅰ-Ⅹ]+?)\s*:\s*(.+?)(?=\[세부능력특기사항\]|\[|$)',
-            r'세부능력\s*및\s*특기사항[:\s]*(.+?)(?=\d+\.\s*[가-힣]|\[|$)',
+        # OCR 텍스트 정리
+        cleaned_text = text.replace('\n', ' ')
+        
+        # 세특 섹션 찾기 (OCR 변환된 형태 포함)
+        seteuk_patterns = [
+            r'세\s*부\s*능\s*력\s*및\s*특\s*기\s*사\s*항',
+            r'세부\s*능력\s*및\s*특기사항',
+            r'세부능력특기사항',
+            r'세부능력\s*및\s*특기\s*사항',
         ]
         
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.DOTALL)
-            for match in matches:
-                if len(match) == 2:
-                    subject, content = match
-                else:
-                    subject, content = "기타", match[0] if match else ""
-                
-                content = content.strip()
-                if len(content) < 10:
-                    continue
-                
-                # 키워드 빈도 계산
-                content_len = len(content)
-                exp_count = sum(1 for kw in self.exploration_keywords if kw in content)
-                online_count = sum(1 for kw in self.online_keywords if kw in content)
-                qual_count = sum(1 for kw in self.qualitative_keywords if kw in content)
-                
-                seteuk_list.append({
-                    'student_id': student_id,
-                    'subject': subject.strip(),
-                    'content_length': content_len,
-                    'kw_count_exploration': exp_count,
-                    'kw_count_online': online_count,
-                    'kw_count_qualitative': qual_count,
-                    'kw_freq_exploration': exp_count / content_len * 1000 if content_len > 0 else 0,
-                    'kw_freq_online': online_count / content_len * 1000 if content_len > 0 else 0,
-                    'kw_freq_qualitative': qual_count / content_len * 1000 if content_len > 0 else 0,
-                })
+        seteuk_start = None
+        for pattern in seteuk_patterns:
+            match = re.search(pattern, cleaned_text)
+            if match:
+                seteuk_start = match.end()
+                break
+        
+        if seteuk_start is None:
+            return seteuk_list
+        
+        # 세특 끝 찾기
+        end_patterns = [r'\d+\.\s*[가-힣]+', r'<\s*체육', r'\[\d학년\]']
+        seteuk_end = len(cleaned_text)
+        for pattern in end_patterns:
+            match = re.search(pattern, cleaned_text[seteuk_start:])
+            if match:
+                seteuk_end = min(seteuk_end, seteuk_start + match.start())
+        
+        seteuk_text = cleaned_text[seteuk_start:seteuk_end]
+        
+        # 과목별 세특 추출 (과목명: 내용 형태)
+        subject_pattern = r'([가-힣A-Za-zⅠⅡ\s]+?)\s*:\s*(.+?)(?=[가-힣A-Za-zⅠⅡ\s]+?\s*:|$)'
+        
+        for match in re.finditer(subject_pattern, seteuk_text, re.DOTALL):
+            subject = match.group(1).strip()
+            content = match.group(2).strip()
+            
+            # 너무 짧은 내용 제외
+            if len(content) < 20:
+                continue
+            
+            # 과목명 정리
+            subject = re.sub(r'\s+', ' ', subject)
+            subject_matched, _ = self.fuzzy_match_subject(subject)
+            if subject_matched:
+                subject = subject_matched
+            
+            # 키워드 빈도
+            content_len = len(content)
+            exp_count = sum(1 for kw in self.exploration_keywords if kw in content)
+            online_count = sum(1 for kw in self.online_keywords if kw in content)
+            qual_count = sum(1 for kw in self.qualitative_keywords if kw in content)
+            
+            seteuk_list.append({
+                'student_id': student_id,
+                'subject': subject,
+                'content_length': content_len,
+                'kw_count_exploration': exp_count,
+                'kw_count_online': online_count,
+                'kw_count_qualitative': qual_count,
+                'kw_freq_exploration': exp_count / content_len * 1000 if content_len > 0 else 0,
+                'kw_freq_online': online_count / content_len * 1000 if content_len > 0 else 0,
+                'kw_freq_qualitative': qual_count / content_len * 1000 if content_len > 0 else 0,
+            })
         
         return seteuk_list
     
-    def calculate_volatility(self, grades: List[Dict], student_id: str, remote_days: Dict) -> Dict:
+    def calculate_volatility(self, grades: List[Dict], student_id: str) -> Dict:
         """성적 변동성 계산"""
         result = {'student_id': student_id}
         
         if not grades:
+            result['overall_volatility'] = 0
+            result['overall_mean'] = 0
+            result['overall_count'] = 0
             return result
         
         df = pd.DataFrame(grades)
         
         # 전체 변동성
-        if 'grade_numeric' in df.columns:
-            result['overall_volatility'] = df['grade_numeric'].std()
-            result['overall_mean'] = df['grade_numeric'].mean()
-            result['overall_count'] = len(df)
+        if 'grade_numeric' in df.columns and len(df) > 0:
+            valid = df['grade_numeric'].dropna()
+            result['overall_volatility'] = valid.std() if len(valid) > 1 else 0
+            result['overall_mean'] = valid.mean() if len(valid) > 0 else 0
+            result['overall_count'] = len(valid)
         
         # 학년별 변동성
         for grade in [1, 2, 3]:
-            grade_df = df[df['grade_year'] == grade]
-            if len(grade_df) >= 2:
-                result[f'grade{grade}_volatility'] = grade_df['grade_numeric'].std()
-                result[f'grade{grade}_mean'] = grade_df['grade_numeric'].mean()
-                result[f'grade{grade}_count'] = len(grade_df)
-                result[f'grade{grade}_remote_days'] = remote_days.get(grade, 0)
+            grade_df = df[df['grade_year'] == grade] if 'grade_year' in df.columns else pd.DataFrame()
+            if len(grade_df) >= 2 and 'grade_numeric' in grade_df.columns:
+                valid = grade_df['grade_numeric'].dropna()
+                result[f'grade{grade}_volatility'] = valid.std() if len(valid) > 1 else 0
+                result[f'grade{grade}_mean'] = valid.mean()
+                result[f'grade{grade}_count'] = len(valid)
+            else:
+                result[f'grade{grade}_volatility'] = 0
+                result[f'grade{grade}_mean'] = 0
+                result[f'grade{grade}_count'] = 0
         
         return result
 
 
 def create_yearly_covid_data(df_students: pd.DataFrame) -> pd.DataFrame:
-    """yearly_covid.csv 생성 (step3/step4 호환)"""
+    """yearly_covid.csv 생성"""
     yearly_data = []
     
     for _, student in df_students.iterrows():
-        student_id = student['anonymous_id']
+        student_id = student.get('anonymous_id', student.get('student_id'))
         
         for grade in [1, 2, 3]:
             year = student.get(f'grade_year_{grade}')
             covid = student.get(f'grade{grade}_covid', 0)
             
-            if year:
+            if pd.notna(year) and year is not None:
                 yearly_data.append({
                     'anonymous_id': student_id,
                     'student_id': student_id,
                     'grade': grade,
                     'year': int(year),
-                    'is_covid_period': covid,
+                    'is_covid_period': int(covid) if pd.notna(covid) else 0,
                 })
     
     return pd.DataFrame(yearly_data)
 
 
 def create_keywords_data(df_seteuk: pd.DataFrame) -> pd.DataFrame:
-    """keywords.csv 생성 (step4 호환)"""
+    """keywords.csv 생성"""
     if df_seteuk.empty:
         return pd.DataFrame()
     
@@ -495,27 +539,27 @@ def create_keywords_data(df_seteuk: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    """메인 실행 함수"""
-    
+    """메인 함수"""
+    print("\n" + "="*80)
+    print("STEP 1: 생활기록부 파싱 (OCR 호환 버전)")
     print("="*80)
-    print("STEP 1: 생활기록부 파싱 (완전 호환 버전)")
-    print("="*80)
-    
-    input_dir = Path('data/raw')
-    output_dir = Path('data/processed')
-    results_dir = Path('data/results')
-    output_dir.mkdir(parents=True, exist_ok=True)
-    results_dir.mkdir(parents=True, exist_ok=True)
-    
-    txt_files = list(input_dir.glob('*.txt'))
-    print(f"\n총 {len(txt_files)}개 파일 발견")
-    
-    if len(txt_files) == 0:
-        print("⚠️  data/raw/ 디렉토리에 txt 파일이 없습니다!")
-        return
     
     parser = StudentRecordParser()
     
+    # 데이터 디렉토리
+    raw_dir = Path('data/raw')
+    processed_dir = Path('data/processed')
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    
+    # txt 파일 찾기
+    txt_files = list(raw_dir.glob('*.txt'))
+    print(f"\n총 {len(txt_files)}개 파일 발견")
+    
+    if not txt_files:
+        print("⚠️  data/raw/ 디렉토리에 txt 파일이 없습니다!")
+        return
+    
+    # 데이터 저장
     all_students = []
     all_grades = []
     all_seteuk = []
@@ -524,31 +568,43 @@ def main():
     print("\n파싱 진행 중...")
     for i, filepath in enumerate(txt_files, 1):
         print(f"  [{i}/{len(txt_files)}] {filepath.name}...", end=' ')
+        
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 text = f.read()
-            
-            student_info = parser.parse_student_info(text, filepath.name)
-            if not student_info:
-                print("❌")
+        except:
+            try:
+                with open(filepath, 'r', encoding='cp949') as f:
+                    text = f.read()
+            except:
+                print("❌ 인코딩 오류")
                 continue
-            
+        
+        try:
+            # 학생 정보
+            student_info = parser.parse_student_info(text, filepath.name)
             student_id = student_info['anonymous_id']
-            grade_years = student_info['grade_years']
-            remote_days = student_info['remote_days']
+            grade_years = {
+                1: student_info.get('grade_year_1'),
+                2: student_info.get('grade_year_2'),
+                3: student_info.get('grade_year_3'),
+            }
+            
+            # 성적
+            grades = parser.extract_grades(text, student_id, grade_years)
+            
+            # 세특
+            seteuk = parser.extract_seteuk(text, student_id, grade_years)
+            
+            # 변동성
+            volatility = parser.calculate_volatility(grades, student_id)
             
             all_students.append(student_info)
-            
-            grades = parser.extract_grades(text, student_id, grade_years)
             all_grades.extend(grades)
-            
-            seteuk = parser.extract_seteuk(text, student_id, grade_years)
             all_seteuk.extend(seteuk)
-            
-            volatility = parser.calculate_volatility(grades, student_id, remote_days)
             all_volatility.append(volatility)
             
-            print("✓")
+            print(f"✓ (성적:{len(grades)}, 세특:{len(seteuk)})")
         except Exception as e:
             print(f"❌ {e}")
     
@@ -557,69 +613,49 @@ def main():
     df_grades = pd.DataFrame(all_grades)
     df_seteuk = pd.DataFrame(all_seteuk)
     df_volatility = pd.DataFrame(all_volatility)
-    
-    # 추가 데이터 생성 (step3/step4 호환)
     df_yearly_covid = create_yearly_covid_data(df_students)
     df_keywords = create_keywords_data(df_seteuk)
     
-    # 학생 정보에서 내부 데이터 제거 후 저장
-    save_columns = [c for c in df_students.columns if c not in ['grade_years', 'remote_days']]
-    df_students_save = df_students[save_columns].copy()
-    
+    # 저장
     print("\n💾 데이터 저장 중...")
     
-    # CSV 저장
-    csv_files = {
-        'student_info.csv': df_students_save,  # step5 호환
-        'students_anonymized.csv': df_students_save,  # step3/step4 호환
+    files_to_save = {
+        'student_info.csv': df_students,
+        'students_anonymized.csv': df_students,
         'grades.csv': df_grades,
         'seteuk.csv': df_seteuk,
         'volatility.csv': df_volatility,
-        'yearly_covid.csv': df_yearly_covid,  # step3/step4 호환
-        'keywords.csv': df_keywords,  # step4 호환
+        'yearly_covid.csv': df_yearly_covid,
+        'keywords.csv': df_keywords,
     }
     
-    for filename, dataframe in csv_files.items():
-        filepath = output_dir / filename
+    for filename, dataframe in files_to_save.items():
         try:
-            dataframe.to_csv(filepath, index=False, encoding='utf-8-sig')
+            dataframe.to_csv(processed_dir / filename, index=False, encoding='utf-8-sig')
             print(f"  ✓ {filename} ({len(dataframe)} rows)")
         except Exception as e:
             print(f"  ❌ {filename}: {e}")
     
-    # 결과 출력
+    # 요약
     print("\n" + "="*80)
     print("✅ 파싱 완료!")
     print("="*80)
-    
-    print(f"\n📊 학생 수: {len(df_students)}명 (비식별화됨)")
+    print(f"\n📊 학생 수: {len(df_students)}명")
     print(f"📊 성적 레코드: {len(df_grades)}건")
     print(f"📊 세특 레코드: {len(df_seteuk)}건")
     
     if 'covid_intensity' in df_students.columns:
-        print(f"\n📊 코로나 영향 강도 분포 (용량-반응):")
-        for intensity in range(4):
+        print(f"\n📊 코로나 영향 강도 분포 (영향받은 학년 수):")
+        for intensity in sorted(df_students['covid_intensity'].unique()):
             count = (df_students['covid_intensity'] == intensity).sum()
-            pct = count / len(df_students) * 100 if len(df_students) > 0 else 0
-            bar = "█" * int(pct / 5)
-            print(f"   - {intensity}학년 영향: {count:3d}명 ({pct:5.1f}%) {bar}")
+            label = "미경험" if intensity == 0 else f"{int(intensity)}개 학년"
+            print(f"   - {label}: {count}명")
     
     if 'any_covid' in df_students.columns:
         covid_count = df_students['any_covid'].sum()
         print(f"\n📊 코로나 경험:")
         print(f"   - 있음: {covid_count}명")
         print(f"   - 없음: {len(df_students) - covid_count}명")
-    
-    print("\n💾 저장된 파일:")
-    print("  - student_info.csv (step5 호환)")
-    print("  - students_anonymized.csv (step3/step4 호환)")
-    print("  - grades.csv")
-    print("  - seteuk.csv")
-    print("  - volatility.csv")
-    print("  - yearly_covid.csv (step3/step4 호환)")
-    print("  - keywords.csv (step4 호환)")
-    
-    print("\n✨ Step 1 완료!")
 
 
 if __name__ == "__main__":

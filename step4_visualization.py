@@ -74,9 +74,19 @@ def load_data(data_dir: str = "data/processed") -> dict:
     for key, filename in files.items():
         filepath = data_path / filename
         if filepath.exists():
-            data[key] = pd.read_csv(filepath)
-            print(f"  ✅ {filename} ({len(data[key])} rows)")
+            try:
+                df = pd.read_csv(filepath)
+                if df.empty:
+                    print(f"  ⚠️ {filename} (빈 파일)")
+                    data[key] = pd.DataFrame()
+                else:
+                    data[key] = df
+                    print(f"  ✅ {filename} ({len(df)} rows)")
+            except Exception as e:
+                print(f"  ⚠️ {filename} 로드 실패: {e}")
+                data[key] = pd.DataFrame()
         else:
+            print(f"  ⚠️ {filename} 없음")
             data[key] = pd.DataFrame()
     
     return data

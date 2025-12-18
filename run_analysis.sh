@@ -2,10 +2,10 @@
 # =============================================================================
 # 생활기록부 분석 파이프라인 실행 스크립트
 # =============================================================================
-# 개선사항:
-# 1. 가상환경 자동 생성 및 활성화 (경로 오류 수정!)
-# 2. 필요 패키지 자동 설치
-# 3. 한글 폰트 자동 설치 (Linux)
+# 수정사항:
+# - statsmodels 필수 설치 추가
+# - thefuzz 필수 설치 (선택 → 필수)
+# - 루트 디렉토리 가상환경 지원
 # =============================================================================
 
 set -e
@@ -22,64 +22,76 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # =============================================================================
-# 가상환경 설정 (경로 오류 수정!)
+# 가상환경 활성화
 # =============================================================================
-VENV_DIR="venv"
-
 echo -e "\n${BLUE}[1/6] 가상환경 설정${NC}"
 
-if [ ! -d "$VENV_DIR" ]; then
-    echo "  📦 가상환경 생성 중..."
-    python3 -m venv $VENV_DIR
-    echo -e "  ${GREEN}✅ 가상환경 생성: $VENV_DIR${NC}"
+if [ -f "./bin/activate" ]; then
+    echo "  🔄 가상환경 활성화 중... (루트 디렉토리)"
+    source ./bin/activate
+    echo -e "  ${GREEN}✅ 활성화 완료: $VIRTUAL_ENV${NC}"
+elif [ -f "./venv/bin/activate" ]; then
+    echo "  🔄 가상환경 활성화 중... (venv 폴더)"
+    source ./venv/bin/activate
+    echo -e "  ${GREEN}✅ 활성화 완료: $VIRTUAL_ENV${NC}"
+elif [ -f "./Scripts/activate" ]; then
+    echo "  🔄 가상환경 활성화 중... (Windows 루트)"
+    source ./Scripts/activate
+    echo -e "  ${GREEN}✅ 활성화 완료${NC}"
+elif [ -f "./venv/Scripts/activate" ]; then
+    echo "  🔄 가상환경 활성화 중... (Windows venv)"
+    source ./venv/Scripts/activate
+    echo -e "  ${GREEN}✅ 활성화 완료${NC}"
 else
-    echo "  ✅ 기존 가상환경: $VENV_DIR"
+    echo -e "  ${YELLOW}⚠️ 가상환경 없음 - 시스템 Python 사용${NC}"
 fi
-
-# ⚠️ 수정된 부분: ./bin/activate → ./$VENV_DIR/bin/activate
-echo "  🔄 가상환경 활성화..."
-source ./$VENV_DIR/bin/activate
-
-if [ -z "$VIRTUAL_ENV" ]; then
-    echo -e "  ${RED}❌ 가상환경 활성화 실패${NC}"
-    exit 1
-fi
-echo -e "  ${GREEN}✅ 활성화: $VIRTUAL_ENV${NC}"
 
 # =============================================================================
-# 패키지 설치
+# 필수 패키지 설치
 # =============================================================================
 echo -e "\n${BLUE}[2/6] 패키지 설치${NC}"
 
-pip install --upgrade pip -q
+# 필수 패키지 목록 (thefuzz, statsmodels 포함!)
+REQUIRED_PACKAGES="pandas numpy matplotlib seaborn scipy openpyxl thefuzz python-Levenshtein statsmodels"
 
-PACKAGES="pandas numpy matplotlib seaborn scipy openpyxl"
+echo "  📦 필수 패키지 설치 중..."
+pip install $REQUIRED_PACKAGES -q 2>/dev/null || {
+    echo "  ⚠️ pip install 실패 - 개별 설치 시도"
+    for pkg in $REQUIRED_PACKAGES; do
+        pip install $pkg -q 2>/dev/null || echo "    ⚠️ $pkg 설치 실패"
+    done
+}
 
-# thefuzz 옵션 (Levenshtein Distance)
-if pip show thefuzz > /dev/null 2>&1; then
-    echo "  ✅ thefuzz 이미 설치됨"
-else
-    echo "  📦 thefuzz 설치 중..."
-    pip install thefuzz python-Levenshtein -q 2>/dev/null || echo "  ⚠️ thefuzz 설치 실패 (선택사항)"
-fi
-
-for pkg in $PACKAGES; do
+# 설치 확인
+echo "  📋 설치 확인:"
+for pkg in pandas numpy matplotlib seaborn scipy openpyxl statsmodels; do
     if pip show $pkg > /dev/null 2>&1; then
-        echo "  ✅ $pkg"
+        echo -e "    ${GREEN}✅ $pkg${NC}"
     else
-        echo "  📦 $pkg 설치 중..."
-        pip install $pkg -q
+        echo -e "    ${RED}❌ $pkg 미설치${NC}"
     fi
 done
 
-# statsmodels (선택)
-if ! pip show statsmodels > /dev/null 2>&1; then
-    echo "  📦 statsmodels 설치 중..."
-    pip install statsmodels -q 2>/dev/null || echo "  ⚠️ statsmodels 설치 실패 (선택사항)"
+# thefuzz 특별 확인
+if pip show thefuzz > /dev/null 2>&1; then
+    echo -e "    ${GREEN}✅ thefuzz (퍼지 매칭)${NC}"
+else
+    echo -e "    ${RED}❌ thefuzz 미설치 - 텍스트 파싱 품질 저하${NC}"
+    echo "    📦 재설치 시도..."
+    pip install thefuzz python-Levenshtein -q 2>/dev/null || true
+fi
+
+# statsmodels 특별 확인
+if pip show statsmodels > /dev/null 2>&1; then
+    echo -e "    ${GREEN}✅ statsmodels (회귀분석)${NC}"
+else
+    echo -e "    ${RED}❌ statsmodels 미설치 - OLS 분석 불가${NC}"
+    echo "    📦 재설치 시도..."
+    pip install statsmodels -q 2>/dev/null || true
 fi
 
 # =============================================================================
-# 한글 폰트 설치 (Linux)
+# 한글 폰트 확인 (Linux)
 # =============================================================================
 echo -e "\n${BLUE}[3/6] 한글 폰트 확인${NC}"
 
@@ -88,11 +100,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         echo "  ✅ 나눔폰트 설치됨"
     else
         echo "  📦 나눔폰트 설치 시도..."
-        if command -v apt-get &> /dev/null; then
-            sudo apt-get update -qq 2>/dev/null
-            sudo apt-get install -y fonts-nanum -qq 2>/dev/null || echo "  ⚠️ 폰트 설치 실패"
-            fc-cache -fv > /dev/null 2>&1 || true
-        fi
+        sudo apt-get update -qq 2>/dev/null || true
+        sudo apt-get install -y fonts-nanum -qq 2>/dev/null || echo "  ⚠️ 폰트 설치 실패"
+        fc-cache -fv > /dev/null 2>&1 || true
     fi
 elif [[ "$OSTYPE" == "darwin"* ]]; then
     echo "  ✅ Mac: AppleGothic"
@@ -112,7 +122,7 @@ mkdir -p outputs/figures
 mkdir -p outputs/reports/individual
 mkdir -p logs
 
-echo "  ✅ 디렉토리 구조 생성 완료"
+echo "  ✅ 디렉토리 구조 준비 완료"
 
 # =============================================================================
 # 파이프라인 실행
@@ -178,9 +188,4 @@ echo "   - data/processed/*.csv    (처리된 데이터)"
 echo "   - data/results/*.csv      (통계 결과)"
 echo "   - outputs/figures/*.png   (시각화)"
 echo "   - outputs/reports/*.txt   (보고서)"
-echo ""
-echo "🔒 개인정보 보호:"
-echo "   - 학생 이름/학번: SHA-256 해싱으로 비식별화"
-echo ""
-echo -e "${YELLOW}💡 가상환경 비활성화: deactivate${NC}"
 echo ""

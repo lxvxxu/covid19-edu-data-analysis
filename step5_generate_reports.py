@@ -22,20 +22,36 @@ def load_all_data():
     for filename in ['student_info.csv', 'students_anonymized.csv']:
         filepath = data_dir / filename
         if filepath.exists():
-            df_students = pd.read_csv(filepath)
-            break
+            try:
+                df_students = pd.read_csv(filepath)
+                if not df_students.empty:
+                    break
+            except:
+                pass
     
     if df_students is None:
         df_students = pd.DataFrame()
     
+    # 안전한 CSV 로드 함수
+    def safe_load_csv(filepath):
+        if filepath.exists():
+            try:
+                df = pd.read_csv(filepath)
+                return df if not df.empty else pd.DataFrame()
+            except:
+                return pd.DataFrame()
+        return pd.DataFrame()
+    
     # 기타 파일
-    df_grades = pd.read_csv(data_dir / 'grades.csv') if (data_dir / 'grades.csv').exists() else pd.DataFrame()
-    df_seteuk = pd.read_csv(data_dir / 'seteuk.csv') if (data_dir / 'seteuk.csv').exists() else pd.DataFrame()
-    df_volatility = pd.read_csv(data_dir / 'volatility.csv') if (data_dir / 'volatility.csv').exists() else pd.DataFrame()
+    df_grades = safe_load_csv(data_dir / 'grades.csv')
+    df_seteuk = safe_load_csv(data_dir / 'seteuk.csv')
+    df_volatility = safe_load_csv(data_dir / 'volatility.csv')
     
     # 결과 파일
-    df_hypothesis = pd.read_csv(results_dir / 'hypothesis_tests.csv') if (results_dir / 'hypothesis_tests.csv').exists() else None
-    df_summary = pd.read_csv(results_dir / 'summary_statistics.csv') if (results_dir / 'summary_statistics.csv').exists() else None
+    df_hypothesis = safe_load_csv(results_dir / 'hypothesis_tests.csv')
+    df_hypothesis = df_hypothesis if not df_hypothesis.empty else None
+    df_summary = safe_load_csv(results_dir / 'summary_statistics.csv')
+    df_summary = df_summary if not df_summary.empty else None
     
     return df_students, df_grades, df_seteuk, df_volatility, df_hypothesis, df_summary
 
